@@ -110,6 +110,18 @@ static void mqttPublishServicetool()
 }
 
 
+// Heat pump fault flags with texts (retained) on <base>/wpufaults, published on change.
+// Used by the HA discovery "Fault" and "Current fault" components.
+static void mqttPublishWpuFaults()
+{
+  char topic[160]{};
+  snprintf(topic, sizeof(topic), "%s/wpufaults", systemConfig.mqtt_base_topic);
+
+  JsonDocument doc;
+  if (getWpuFaultsJSON(doc.to<JsonObject>()))
+    MQTTPublishJson(doc, topic);
+}
+
 void MQTTSendBuffered(const JsonDocument &doc, const char *topic)
 {
   MQTTPublishJson(doc, topic);
@@ -154,6 +166,11 @@ void execMQTTTasks()
     {
       servicetoolMqttUpdate = false;
       mqttPublishServicetool();
+    }
+    if (updateMQTTwpuFaults)
+    {
+      updateMQTTwpuFaults = false;
+      mqttPublishWpuFaults();
     }
     // if (updateMQTTmodeStatus)
     // {
@@ -613,6 +630,8 @@ bool setupMQTTClient()
         if (changed)
           sendHomeAssistantDiscovery = true; // possibly a new broker or base topic
         servicetoolMqttUpdate = true; // (re)publish session state after every connect
+        if (isWpuDevice())
+          updateMQTTwpuFaults = true; // and the heat pump faults
 
         return true;
       }
