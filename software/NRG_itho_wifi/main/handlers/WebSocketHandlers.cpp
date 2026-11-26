@@ -30,6 +30,8 @@ void jsonSystemstat()
   systemstat["fan_demand"] = ithoFanDemand;
   systemstat["ota_progress"] = otaUpdateProgress;
   systemstat["uuid"] = uuid;
+  // Shows the "Heat pump" menu item only when a heat pump (WPU) is connected
+  systemstat["is_wpu"] = isWpuDevice();
 
   notifyClients(root.as<JsonObject>());
 }

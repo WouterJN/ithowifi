@@ -901,6 +901,9 @@ const messageHandlers = {
   systemstat: function (f) {
     var x = f.systemstat;
     uuid = x.uuid;
+    // "Heat pump" menu item: only when the firmware reports a heat pump (WPU)
+    var wpum = $id('wpumenu');
+    if (wpum && 'is_wpu' in x) wpum.classList.toggle('hidden', !x.is_wpu);
     if ('sensor_temp' in x) {
       var stEl = $id('sensor_temp');
       if (stEl) stEl.innerHTML = `Temperature: ${round(x.sensor_temp, 1)}&#8451;`;
@@ -1026,6 +1029,12 @@ const messageHandlers = {
     if (!el) return;
     el.innerHTML = `Firmware update progress: ${x.percent}%`;
     moveBar(x.percent, "updateBar");
+  },
+  wpufaultsettings: function (f) {
+    if (typeof wpuShowFaultSettings === 'function') wpuShowFaultSettings(f.wpufaultsettings);
+  },
+  wpufaults: function (f) {
+    if (typeof wpuShowFaults === 'function') wpuShowFaults(f.wpufaults);
   },
   sysmessage: function (f) {
     var x = f.sysmessage;
@@ -2221,6 +2230,7 @@ function update_page(page) {
   if (page == 'status') { main.insertAdjacentHTML('beforeend', html_ithostatus); }
   if (page == 'remotes') { main.insertAdjacentHTML('beforeend', html_remotessetup); }
   if (page == 'rfstatus') { main.insertAdjacentHTML('beforeend', html_rfstatus); }
+  if (page == 'wpu') { main.insertAdjacentHTML('beforeend', html_wpu); main.style.maxWidth = '1200px'; }
   if (page == 'vremotes') { main.insertAdjacentHTML('beforeend', html_vremotessetup); }
   if (page == 'mqtt') { main.insertAdjacentHTML('beforeend', html_mqttsetup); }
   if (page == 'api') { main.insertAdjacentHTML('beforeend', html_api); }

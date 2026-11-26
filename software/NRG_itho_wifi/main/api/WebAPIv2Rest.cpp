@@ -7,6 +7,7 @@
 #include "IthoQueue.h"
 #include "config/IthoRemote.h"
 #include "ithodevice/IthoDevice.h"
+#include "ithodevice/WpuFaultSettings.h"
 
 #include <ESPAsyncWebServer.h>
 #include <new>
@@ -893,6 +894,50 @@ static void handleGetWpuFaults(AsyncWebServerRequest *request)
   sendSuccess(request, data);
 }
 
+// GET /api/v2/wpu/fault_settings
+// Returns the fault settings from the last read (no I2C traffic). Start a read with
+// POST /api/v2/wpu/fault_settings/refresh; "state" is "none" until the first read.
+static void handleGetWpuFaultSettings(AsyncWebServerRequest *request)
+{
+  if (!checkRestAuth(request))
+    return;
+  if (!isWpuDevice())
+  {
+    sendFail(request, "connected device is not a heat pump (WPU)");
+    return;
+  }
+  JsonDocument data;
+  if (!getWpuFaultSettingsJSON(data.to<JsonObject>()))
+  {
+    sendError(request, "busy, try again");
+    return;
+  }
+  sendSuccess(request, data);
+}
+
+// POST /api/v2/wpu/fault_settings/refresh (no body)
+// Starts reading the fault settings from the heat pump in the background (a few seconds).
+// 202 + {"state":"reading"} when started, 409 when a read is already running.
+static void handlePostWpuFaultSettingsRefresh(AsyncWebServerRequest *request)
+{
+  if (!checkRestAuth(request))
+    return;
+  switch (wpuFaultSettingsRefresh())
+  {
+  case WpuFaultSettingsStart::not_wpu:
+    sendFail(request, "connected device is not a heat pump (WPU)");
+    return;
+  case WpuFaultSettingsStart::busy:
+    sendFail(request, "a read is already running", 409);
+    return;
+  case WpuFaultSettingsStart::started:
+    break;
+  }
+  JsonDocument data;
+  data["state"] = "reading";
+  sendSuccess(request, data, 202);
+}
+
 // POST /api/v2/wpu/manual_control
 // Body: {"index":1,"datatype":1,"value":1,"checked":1}
 static void handlePostManualControl(AsyncWebServerRequest *request, JsonVariant &json)
@@ -959,6 +1004,8 @@ void registerRestAPIv2Routes(AsyncWebServer &server)
   server.on("/api/v2/wpu/outside_temp", HTTP_OPTIONS, handleOptions);
   server.on("/api/v2/wpu/manual_control", HTTP_OPTIONS, handleOptions);
   server.on("/api/v2/wpu/faults", HTTP_OPTIONS, handleOptions);
+  server.on("/api/v2/wpu/fault_settings", HTTP_OPTIONS, handleOptions);
+  server.on("/api/v2/wpu/fault_settings/refresh", HTTP_OPTIONS, handleOptions);
 
   // GET endpoints
   server.on("/api/v2/speed", HTTP_GET, handleGetSpeed);
@@ -970,6 +1017,8 @@ void registerRestAPIv2Routes(AsyncWebServer &server)
   server.on("/api/v2/remotes", HTTP_GET, handleGetRemotes);
   server.on("/api/v2/vremotes", HTTP_GET, handleGetVRemotes);
   server.on("/api/v2/wpu/faults", HTTP_GET, handleGetWpuFaults);
+  server.on("/api/v2/wpu/fault_settings", HTTP_GET, handleGetWpuFaultSettings);
+  server.on("/api/v2/wpu/fault_settings/refresh", HTTP_POST, handlePostWpuFaultSettingsRefresh);
   server.on("/api/v2/rfstatus", HTTP_GET, handleGetRFStatus);
   server.on("/api/v2/settings", HTTP_GET, handleGetSettings);
 

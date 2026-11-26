@@ -1,5 +1,6 @@
 // Native unit tests for the I2C service message helpers (main/ithodevice/i2c_service.h):
-// frame building, hex input parsing, reply parsing and the 10E1/10E2/4220 decoders.
+// frame building, hex input parsing, reply parsing, the 10E1/10E2/4220 decoders and the
+// heat pump fault settings (4030 bank 0).
 
 #include <unity.h>
 #include <cstdint>
@@ -191,6 +192,96 @@ void test_fault_table_lookup()
   TEST_ASSERT_NULL(i2csvc::faultText(i2csvc::findFaultTable(0x00, 0x1B, 25), 200));
 }
 
+// ---------- Heat pump fault settings (0x4030 bank 0) ----------
+
+void test_bank_read_request()
+{
+  uint8_t d[4];
+  i2csvc::bankReadRequest(d, 0x00, 42, 2);
+  const uint8_t want[]{0x00, 0x00, 0x2A, 0x02};
+  TEST_ASSERT_EQUAL_HEX8_ARRAY(want, d, 4);
+  i2csvc::bankReadRequest(d, 0x01, 0x0123, 3);
+  const uint8_t want2[]{0x01, 0x01, 0x23, 0x03};
+  TEST_ASSERT_EQUAL_HEX8_ARRAY(want2, d, 4);
+}
+
+void test_decode_fault_settings_three_records()
+{
+  // index 27..29: element current too high, frost, source temp too low (factory defaults)
+  const uint8_t p[]{0x00, 0x00, 0x1B,
+                    30, 0x00, 0x02, 0x00, 0x1E, 2, 2, 128,
+                    7, 0x00, 0x02, 0x02, 0x1C, 6, 2, 64,
+                    23, 0x31, 0x38, 0x00, 0x00, 0, 1, 0};
+  uint16_t start = 0xFFFF;
+  std::vector<i2csvc::WpuFaultSetting> out;
+  TEST_ASSERT_TRUE(i2csvc::decodeWpuFaultSettings(p, sizeof(p), start, out));
+  TEST_ASSERT_EQUAL_UINT16(27, start);
+  TEST_ASSERT_EQUAL_UINT32(3, out.size());
+  TEST_ASSERT_EQUAL_UINT8(30, out[0].priority);
+  TEST_ASSERT_EQUAL_UINT16(2, out[0].faultTime);
+  TEST_ASSERT_EQUAL_UINT16(30, out[0].retryTime);
+  TEST_ASSERT_EQUAL_UINT8(128, out[0].blockFlags);
+  TEST_ASSERT_EQUAL_UINT16(540, out[1].retryTime);
+  TEST_ASSERT_EQUAL_UINT8(6, out[1].maxRetries);
+  TEST_ASSERT_EQUAL_UINT16(12600, out[2].faultTime); // big endian 0x3138
+  TEST_ASSERT_EQUAL_UINT8(1, out[2].reportType);
+}
+
+void test_decode_fault_settings_single_record()
+{
+  const uint8_t p[]{0x00, 0x00, 0x2B, 0, 0x00, 0x00, 0x00, 0x05, 0, 4, 133};
+  uint16_t start = 0;
+  std::vector<i2csvc::WpuFaultSetting> out;
+  TEST_ASSERT_TRUE(i2csvc::decodeWpuFaultSettings(p, sizeof(p), start, out));
+  TEST_ASSERT_EQUAL_UINT16(43, start);
+  TEST_ASSERT_EQUAL_UINT32(1, out.size());
+  TEST_ASSERT_EQUAL_UINT8(133, out[0].blockFlags);
+}
+
+void test_decode_fault_settings_rejects_bad_replies()
+{
+  uint16_t start = 0;
+  std::vector<i2csvc::WpuFaultSetting> out;
+  const uint8_t bank1[]{0x01, 0x00, 0x00, 1, 2, 3, 4, 5, 6, 7, 8};
+  TEST_ASSERT_FALSE(i2csvc::decodeWpuFaultSettings(bank1, sizeof(bank1), start, out)); // manual control bank
+  const uint8_t partial[]{0x00, 0x00, 0x00, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+  TEST_ASSERT_FALSE(i2csvc::decodeWpuFaultSettings(partial, sizeof(partial), start, out)); // not whole records
+  const uint8_t header[]{0x00, 0x00, 0x00};
+  TEST_ASSERT_FALSE(i2csvc::decodeWpuFaultSettings(header, sizeof(header), start, out)); // no records
+  TEST_ASSERT_FALSE(i2csvc::decodeWpuFaultSettings(nullptr, 11, start, out));
+  TEST_ASSERT_EQUAL_UINT32(0, out.size());
+}
+
+void test_fault_settings_count_per_list_version()
+{
+  TEST_ASSERT_EQUAL_UINT8(37, i2csvc::wpuFaultSettingsCount(2));
+  TEST_ASSERT_EQUAL_UINT8(39, i2csvc::wpuFaultSettingsCount(8));
+  TEST_ASSERT_EQUAL_UINT8(40, i2csvc::wpuFaultSettingsCount(9));
+  TEST_ASSERT_EQUAL_UINT8(42, i2csvc::wpuFaultSettingsCount(16));
+  TEST_ASSERT_EQUAL_UINT8(42, i2csvc::wpuFaultSettingsCount(20));
+  TEST_ASSERT_EQUAL_UINT8(43, i2csvc::wpuFaultSettingsCount(27));
+  TEST_ASSERT_EQUAL_UINT8(43, i2csvc::wpuFaultSettingsCount(31));
+  TEST_ASSERT_EQUAL_UINT8(44, i2csvc::wpuFaultSettingsCount(37));
+  TEST_ASSERT_EQUAL_UINT8(44, i2csvc::wpuFaultSettingsCount(41));
+  // list versions that do not exist in the known version table
+  TEST_ASSERT_EQUAL_UINT8(0, i2csvc::wpuFaultSettingsCount(0));
+  TEST_ASSERT_EQUAL_UINT8(0, i2csvc::wpuFaultSettingsCount(3));
+  TEST_ASSERT_EQUAL_UINT8(0, i2csvc::wpuFaultSettingsCount(15));
+  TEST_ASSERT_EQUAL_UINT8(0, i2csvc::wpuFaultSettingsCount(26));
+  TEST_ASSERT_EQUAL_UINT8(0, i2csvc::wpuFaultSettingsCount(42));
+}
+
+void test_report_type_and_block_flag_names()
+{
+  TEST_ASSERT_EQUAL_STRING("No report", i2csvc::wpuReportTypeName(0));
+  TEST_ASSERT_EQUAL_STRING("Unlimited retry + thermostat report", i2csvc::wpuReportTypeName(4));
+  TEST_ASSERT_NULL(i2csvc::wpuReportTypeName(5));
+  TEST_ASSERT_EQUAL_STRING("CH", i2csvc::wpuBlockFlagName(0));
+  TEST_ASSERT_EQUAL_STRING("compressor", i2csvc::wpuBlockFlagName(6));
+  TEST_ASSERT_EQUAL_STRING("element", i2csvc::wpuBlockFlagName(7));
+  TEST_ASSERT_NULL(i2csvc::wpuBlockFlagName(8));
+}
+
 int main(int argc, char **argv)
 {
   UNITY_BEGIN();
@@ -208,5 +299,11 @@ int main(int argc, char **argv)
   RUN_TEST(test_fault_history_3222);
   RUN_TEST(test_fault_history_4205);
   RUN_TEST(test_fault_table_lookup);
+  RUN_TEST(test_bank_read_request);
+  RUN_TEST(test_decode_fault_settings_three_records);
+  RUN_TEST(test_decode_fault_settings_single_record);
+  RUN_TEST(test_decode_fault_settings_rejects_bad_replies);
+  RUN_TEST(test_fault_settings_count_per_list_version);
+  RUN_TEST(test_report_type_and_block_flag_names);
   return UNITY_END();
 }

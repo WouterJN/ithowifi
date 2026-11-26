@@ -1,0 +1,196 @@
+<div class="header">
+  <h1>Heat pump</h1>
+</div>
+<p id="wpuNotWpu" class="hidden" style="color:#a00;"></p>
+<div id="wpuContent">
+  <h2>Current faults</h2>
+  <p id="wpuFaultsState">Loading...</p>
+  <table id="wpuFaultsTable" class="pure-table pure-table-bordered"></table>
+
+  <h2>Fault settings</h2>
+  <p>For every fault the heat pump stores how it reacts to it: how long the fault must be present,
+    when and how often it retries, how it is reported and which functions are blocked while the
+    fault is active. This page only reads these settings; nothing is changed on the heat pump.</p>
+  <p>
+    <button id="wpuFsRefresh" type="button" class="pure-button pure-button-primary">Read from heat pump</button>
+    &nbsp;<span id="wpuFsStatus"></span>
+  </p>
+  <p id="wpuFsWarn" class="hidden" style="color:#a60;"></p>
+  <p>
+    Sort by
+    <select id="wpuFsSort" class="pure-input">
+      <option value="code">fault code</option>
+      <option value="priority">priority</option>
+    </select>
+    &nbsp;<button id="wpuFsDownload" type="button" class="pure-button" disabled>Download JSON</button>
+  </p>
+  <div style="overflow-x:auto;">
+    <table id="wpuFsTable" class="pure-table pure-table-bordered" style="font-size:90%;"></table>
+  </div>
+  <details style="margin-top:1em;">
+    <summary>What the columns mean</summary>
+    <ul>
+      <li><b>Priority</b>: decides which fault is shown when several faults are active at the same time.</li>
+      <li><b>Fault time</b>: how long the fault must be present before the heat pump acts on it (raw value as
+        stored in the heat pump, most likely seconds).</li>
+      <li><b>Retry time</b>: how long the heat pump waits before it tries again (same unit).</li>
+      <li><b>Retries</b>: how many retries before the heat pump goes into fault.</li>
+      <li><b>Report</b>: how the fault is reported (on the thermostat, with or without the fault relay, or
+        unlimited retries).</li>
+      <li><b>Blocked functions</b>: what is switched off while the fault is active (&#10003; = blocked).</li>
+    </ul>
+  </details>
+</div>
+<script>
+  var wpuFsData = null;
+  var wpuFsWatch = null; // asks again when a read stops sending progress (firmware then reports "error")
+
+  function wpuCell(row, text, title) {
+    var td = row.insertCell();
+    td.textContent = text;
+    if (title) td.title = title;
+    return td;
+  }
+
+  function wpuHeader(table, names, titles) {
+    var tr = table.createTHead().insertRow();
+    names.forEach(function (n, i) {
+      var th = document.createElement('th');
+      th.textContent = n;
+      if (titles && titles[i]) th.title = titles[i];
+      tr.appendChild(th);
+    });
+  }
+
+  function wpuAge(s) {
+    if (s < 60) return s + ' s ago';
+    if (s < 3600) return Math.round(s / 60) + ' min ago';
+    return Math.round(s / 3600) + ' h ago';
+  }
+
+  function wpuNotWpu(device) {
+    var n = $id('wpuNotWpu');
+    if (!n) return;
+    n.textContent = 'Only available when an Itho heat pump (WPU) is connected' + (device ? ' (connected: ' + device + ').' : '.');
+    n.classList.remove('hidden');
+    $id('wpuContent').classList.add('hidden');
+  }
+
+  // Current faults (0x4220), same data as MQTT <base>/wpufaults
+  function wpuShowFaults(x) {
+    var st = $id('wpuFaultsState');
+    var tbl = $id('wpuFaultsTable');
+    if (!st || !tbl) return;
+    tbl.innerHTML = '';
+    if (x.state === 'unknown') { st.textContent = 'No answer from the heat pump yet.'; return; }
+    st.textContent = x.state === 'fault' ? 'Active: ' + x.fault : 'No active fault.';
+    var rows = [];
+    (x.active || []).forEach(function (f) { rows.push(['active', f]); });
+    (x.reported || []).forEach(function (f) { rows.push(['reported earlier, no longer active', f]); });
+    if (!rows.length) return;
+    wpuHeader(tbl, ['Code', 'Fault', 'Status']);
+    var body = tbl.createTBody();
+    rows.forEach(function (r) {
+      var tr = body.insertRow();
+      wpuCell(tr, r[1].code);
+      wpuCell(tr, r[1].text);
+      wpuCell(tr, r[0]);
+    });
+  }
+
+  function wpuStatusText(x) {
+    switch (x.state) {
+      case 'reading': return 'Reading... ' + x.read + ' / ' + x.count;
+      case 'none': return 'Not read yet.';
+      case 'unsupported': return 'The heat pump does not answer fault-settings requests (firmware too old?).';
+      case 'error': return 'Reading failed, try again.';
+    }
+    var t = 'Read ' + x.read + ' of ' + x.count + ' faults, list version ' + x.list_version;
+    if ('age' in x) t += ', ' + wpuAge(x.age);
+    if (x.state === 'partial') t += ' (' + (x.count - x.read) + ' not answered, read again to complete)';
+    return t + '.';
+  }
+
+  function wpuShowFaultSettings(x) {
+    var tbl = $id('wpuFsTable');
+    if (!tbl) return; // page no longer open
+    if (x.state === 'not_wpu') { wpuNotWpu(x.device); return; }
+
+    $id('wpuFsStatus').textContent = wpuStatusText(x);
+    $id('wpuFsRefresh').disabled = x.state === 'reading';
+    clearTimeout(wpuFsWatch);
+    if (x.state === 'reading')
+      wpuFsWatch = setTimeout(function () { if ($id('wpuFsTable')) websock_send('{"wpu_fault_settings":"open"}'); }, 12000);
+    var warn = $id('wpuFsWarn');
+    var w = [];
+    if (x.list_version_known === false && x.state !== 'none')
+      w.push('List version ' + x.list_version + ' is newer than the versions this firmware knows; the table shows what the heat pump answered.');
+    if (x.stale) w.push('The list version changed since this read; read again.');
+    warn.textContent = w.join(' ');
+    warn.classList.toggle('hidden', w.length === 0);
+
+    if (!x.faults) return; // progress message, keep the current table
+    wpuFsData = x;
+    $id('wpuFsDownload').disabled = !x.faults.some(function (f) { return f.valid; });
+    wpuRenderTable();
+  }
+
+  function wpuRenderTable() {
+    var tbl = $id('wpuFsTable');
+    if (!tbl || !wpuFsData) return;
+    tbl.innerHTML = '';
+    var x = wpuFsData;
+    if (!x.faults.length) return;
+    var flags = x.block_flags || [];
+    wpuHeader(tbl, ['Code', 'Fault', 'Priority', 'Fault time', 'Retry time', 'Retries', 'Report'].concat(flags),
+      [null, null, 'Which fault is shown when several are active', 'Raw value, most likely seconds', 'Raw value, most likely seconds',
+        'Retries before the heat pump goes into fault', 'How the fault is reported'].concat(flags.map(function (f) { return f + ' blocked while the fault is active'; })));
+    var list = x.faults.slice();
+    if ($id('wpuFsSort').value === 'priority')
+      list.sort(function (a, b) {
+        if (a.valid !== b.valid) return a.valid ? -1 : 1;
+        return (a.priority - b.priority) || (a.code - b.code);
+      });
+    var body = tbl.createTBody();
+    list.forEach(function (f) {
+      var tr = body.insertRow();
+      wpuCell(tr, f.code);
+      wpuCell(tr, f.text);
+      if (!f.valid) {
+        var td = wpuCell(tr, 'not answered');
+        td.colSpan = 5 + flags.length;
+        td.style.color = '#999';
+        return;
+      }
+      wpuCell(tr, f.priority);
+      wpuCell(tr, f.fault_time);
+      wpuCell(tr, f.retry_time);
+      wpuCell(tr, f.max_retries);
+      wpuCell(tr, f.report, 'report type ' + f.report_type);
+      for (var b = 0; b < flags.length; b++) {
+        var on = (f.block_flags >> b) & 1;
+        var c = wpuCell(tr, on ? '✓' : '·', flags[b] + (on ? ' blocked' : ' not blocked'));
+        c.style.textAlign = 'center';
+      }
+    });
+  }
+
+  $id('wpuFsRefresh').addEventListener('click', function () {
+    $id('wpuFsRefresh').disabled = true;
+    websock_send('{"wpu_fault_settings":"refresh"}');
+  });
+  $id('wpuFsSort').addEventListener('change', wpuRenderTable);
+  $id('wpuFsDownload').addEventListener('click', function () {
+    if (!wpuFsData) return;
+    var blob = new Blob([JSON.stringify(wpuFsData, null, 2)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'heatpump-fault-settings-lv' + wpuFsData.list_version + '.json';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  });
+
+  // Sends what the module has; it starts a read by itself when there is no data yet
+  websock_send('{"wpu_fault_settings":"open"}');
+</script>

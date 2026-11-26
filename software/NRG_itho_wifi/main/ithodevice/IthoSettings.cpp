@@ -1,5 +1,6 @@
 #include "IthoDevice.h"
 #include "devices/error_info_labels.h"
+#include "i2c_service.h"
 
 ithoSettings *ithoSettingsArray = nullptr;
 int32_t *resultPtr2410 = nullptr;
@@ -327,6 +328,23 @@ void setSetting4030(uint16_t index, uint8_t datatype, uint16_t value, uint8_t ch
     }
     return;
   }
+}
+
+// Generic 0x4030 read: [bank][index hi][index lo][count] to any I2C address.
+// Bank 0 = heat pump fault settings, bank 1 = manual control; the RF-plus board (0x20) uses
+// the same message for its log banks. Only reads, nothing is changed on the device.
+// Returns the reply length in rx (0 = no valid reply). rx must hold I2C_SLAVE_RX_BUF_LEN bytes.
+// Must run from the I2C queue (it takes the bus for one request + reply).
+size_t queryBank4030(uint8_t dest, uint8_t bank, uint16_t index, uint8_t count, uint8_t *rx)
+{
+  uint8_t data[4];
+  i2csvc::bankReadRequest(data, bank, index, count);
+  uint8_t frame[4 + 7];
+  const size_t n = i2csvc::buildFrame(frame, sizeof(frame), dest, 0x4030, i2csvc::TYPE_QUERY, data, sizeof(data));
+  if (!n)
+    return 0;
+  D_LOG("I2C: Query 4030: %s", i2cBufToString(frame, n).c_str());
+  return sendI2cQuery(frame, n, rx, I2C_CMD_QUERY_4030);
 }
 
 int32_t *sendQuery2410(uint8_t index, bool updateweb)
