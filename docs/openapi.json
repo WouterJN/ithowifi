@@ -816,6 +816,56 @@
         }
       }
     },
+    "/api/v2/wpu/fault_settings": {
+      "get": {
+        "summary": "Heat pump (WPU) fault settings from the last read (read-only, no I2C traffic): per fault the priority, fault time, retry time, max retries, report type and blocked functions. state is none (not read yet), reading, ok, partial, unsupported or error. Start a read with POST /api/v2/wpu/fault_settings/refresh. Fails on devices that are not a heat pump.",
+        "tags": [
+          "REST API v2"
+        ],
+        "responses": {
+          "200": {
+            "description": "JSend success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/wpu/fault_settings/refresh": {
+      "post": {
+        "summary": "Read the fault settings from the heat pump again, in the background (a few seconds). No request body. Returns 202 with state reading; 409 when a read is already running. Nothing is written to the heat pump.",
+        "tags": [
+          "REST API v2"
+        ],
+        "responses": {
+          "202": {
+            "description": "JSend success, read started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "JSend fail, a read is already running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/openapi.json": {
       "get": {
         "summary": "OpenAPI specification",

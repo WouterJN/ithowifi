@@ -1,6 +1,7 @@
 #include "websocket.h"
 #include "managers/SecureWebCommLite.h"
 #include "ithodevice/i2c_service.h"
+#include "ithodevice/WpuFaultSettings.h"
 
 static std::unordered_map<uint32_t, std::string> g_wsBuffers;
 static SemaphoreHandle_t g_wsBuffersMutex = xSemaphoreCreateMutex();
@@ -917,6 +918,29 @@ void handle_ws_message(JsonObject root)
       remotes.updateRemoteTxPower(idx, root["tx_power"].as<uint8_t>());
     }
     saveRemotesflag = true;
+  }
+
+  // Heat pump fault settings page (read-only).
+  //   "open":    page opened -> send what we have; start a read if there is no data yet
+  //   "refresh": "Read from heat pump" button -> start a new read
+  // Progress and the result are pushed as "wpufaultsettings" messages by WpuFaultSettings.cpp.
+  if (root["wpu_fault_settings"].is<const char *>())
+  {
+    const char *action = root["wpu_fault_settings"];
+    const bool refresh = strcmp(action, "refresh") == 0 ||
+                         (strcmp(action, "open") == 0 && wpuFaultSettingsNeedRead());
+    if (refresh)
+      wpuFaultSettingsRefresh(); // does nothing for a non-heat-pump device or while busy
+    JsonDocument doc;
+    if (getWpuFaultSettingsJSON(doc["wpufaultsettings"].to<JsonObject>()))
+      notifyClients(doc.as<JsonObject>());
+    // The same page also shows the current faults (0x4220, polled with the status)
+    if (isWpuDevice())
+    {
+      JsonDocument faults;
+      if (getWpuFaultsJSON(faults["wpufaults"].to<JsonObject>()))
+        notifyClients(faults.as<JsonObject>());
+    }
   }
 
   // Itho Spider thermostat: discovery wizard and setpoint (ADR-0011)

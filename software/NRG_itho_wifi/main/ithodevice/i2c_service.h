@@ -330,4 +330,108 @@ namespace i2csvc
     }
     return s;
   }
+
+  // ---------- Heat pump fault settings (0x4030 bank 0) ----------
+  //
+  // Every heat pump fault has a small configuration record that decides how the unit reacts
+  // to it: priority (which fault wins on the thermostat), how long the fault must be present,
+  // how long to wait before a retry, how many retries, how it is reported and which functions
+  // are blocked while it is active.
+  //
+  // They are read with message 0x4030 (query), data [bank 0][index hi][index lo][count].
+  // The reply data is [bank 0][index hi][index lo] followed by `count` records of 8 bytes:
+  //   [0] priority  [1..2] fault time (BE)  [3..4] retry time (BE)
+  //   [5] max retries  [6] report type  [7] block flags
+  // At most 3 records per request, so the reply fits the bus buffer.
+
+  constexpr uint8_t WPU_FAULT_SETTINGS_BANK = 0x00;
+  constexpr uint8_t WPU_FAULT_SETTINGS_PER_READ = 3;
+  constexpr size_t WPU_FAULT_SETTING_SIZE = 8;
+
+  struct WpuFaultSetting
+  {
+    uint8_t priority = 0;
+    uint16_t faultTime = 0;
+    uint16_t retryTime = 0;
+    uint8_t maxRetries = 0;
+    uint8_t reportType = 0;
+    uint8_t blockFlags = 0;
+  };
+
+  // Data bytes of a 0x4030 read request: [bank][index hi][index lo][count]
+  inline void bankReadRequest(uint8_t out[4], uint8_t bank, uint16_t index, uint8_t count)
+  {
+    out[0] = bank;
+    out[1] = static_cast<uint8_t>(index >> 8);
+    out[2] = static_cast<uint8_t>(index & 0xFF);
+    out[3] = count;
+  }
+
+  // Decodes the payload of a 0x4030 bank 0 reply. On success `start` is the index of the first
+  // record and `out` holds the records in order. False when it is not a bank 0 reply, has no
+  // records, or the length is not header + whole records.
+  inline bool decodeWpuFaultSettings(const uint8_t *p, size_t len, uint16_t &start, std::vector<WpuFaultSetting> &out)
+  {
+    out.clear();
+    if (!p || len < 3 + WPU_FAULT_SETTING_SIZE || (len - 3) % WPU_FAULT_SETTING_SIZE != 0 || p[0] != WPU_FAULT_SETTINGS_BANK)
+      return false;
+    start = static_cast<uint16_t>(p[1] << 8 | p[2]);
+    for (size_t i = 3; i + WPU_FAULT_SETTING_SIZE <= len; i += WPU_FAULT_SETTING_SIZE)
+    {
+      WpuFaultSetting s;
+      s.priority = p[i];
+      s.faultTime = static_cast<uint16_t>(p[i + 1] << 8 | p[i + 2]);
+      s.retryTime = static_cast<uint16_t>(p[i + 3] << 8 | p[i + 4]);
+      s.maxRetries = p[i + 5];
+      s.reportType = p[i + 6];
+      s.blockFlags = p[i + 7];
+      out.push_back(s);
+    }
+    return true;
+  }
+
+  // Number of fault settings for a heat pump list version. The fault list grew over the
+  // firmware versions; the unit itself does not report the count. 0 = unknown list version.
+  inline uint8_t wpuFaultSettingsCount(uint8_t listVersion)
+  {
+    if (listVersion == 2)
+      return 37;
+    if (listVersion >= 4 && listVersion <= 8)
+      return 39;
+    if (listVersion == 9)
+      return 40;
+    if ((listVersion >= 10 && listVersion <= 14) || (listVersion >= 16 && listVersion <= 20))
+      return 42;
+    if ((listVersion >= 21 && listVersion <= 25) || listVersion == 27 || listVersion == 31)
+      return 43;
+    if (listVersion == 33 || listVersion == 34 || listVersion == 37 || listVersion == 41)
+      return 44;
+    return 0;
+  }
+
+  // Count to read when the list version is not known: the size of the newest known list.
+  // Reading is harmless; records past the end simply get no reply.
+  constexpr uint8_t WPU_FAULT_SETTINGS_MAX = 44;
+
+  // Report type: how an active fault is reported
+  inline const char *wpuReportTypeName(uint8_t type)
+  {
+    static const char *const names[]{
+        "No report",
+        "Error without fault relay",
+        "Error with fault relay",
+        "Unlimited retry",
+        "Unlimited retry + thermostat report"};
+    return type < sizeof(names) / sizeof(names[0]) ? names[type] : nullptr;
+  }
+  constexpr uint8_t WPU_REPORT_TYPE_COUNT = 5;
+
+  // Block flags: bit n set = that function is blocked while the fault is active
+  inline const char *wpuBlockFlagName(uint8_t bit)
+  {
+    static const char *const names[]{
+        "CH", "boiler", "free cooling", "deaeration",
+        "DHW element", "air regeneration", "compressor", "element"};
+    return bit < 8 ? names[bit] : nullptr;
+  }
 } // namespace i2csvc

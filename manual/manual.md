@@ -221,6 +221,7 @@ There are two variants:
   - `POST /api/v2/vremote` and `POST /api/v2/rfremote/command`, `/co2`, `/demand`, `/config`: virtual and RF remote commands
   - `POST /api/v2/wpu/outside_temp` and `/api/v2/wpu/manual_control`: WPU-specific
   - `GET /api/v2/wpu/faults`: WPU active and reported faults with texts (also on MQTT `<base>/wpufaults` and as Home Assistant entities "Fault" and "Current fault")
+  - `GET /api/v2/wpu/fault_settings` and `POST /api/v2/wpu/fault_settings/refresh`: WPU fault settings (read-only), see [WPU (heat pump)](#wpu-heat-pump)
 - **Legacy API (v1)**: a simple read-only API in query style via `/api.html`, for example:
   - `http://<add-on>/api.html?get=ithostatus`
   - `http://<add-on>/api.html?get=currentspeed` (other values: `lastcmd`, `queue`, `remotesinfo`)
@@ -346,6 +347,13 @@ The WPU is a heat pump (referred to in the firmware as *Heatpump*), not a ventil
 **What the add-on reads out (among others):** a large number of temperatures (outside, boiler top/bottom, evaporator, suction and compressed gas, liquid, source in/out, CV supply and return, °C), CV pressure (bar), the current consumption of the compressor and the electric element (A), pump speeds for CV, source and boiler (%), valve positions, the status of compressor/element/trickle heating, various timers and an error code with detailed error bytes.
 
 > The error bytes are shown as raw values; a translation table to descriptions is not included in the add-on. Consult the Itho documentation for their meaning.
+
+**Heat pump page:** when a WPU is connected, the menu shows an extra item **Heat pump** (hidden for all other devices). It shows:
+
+- the **current faults** (active, and reported earlier but no longer active), with texts;
+- the **fault settings**: for every fault the heat pump stores how it reacts to it: priority (which fault is shown when several are active), fault time (how long the fault must be present), retry time, number of retries, how it is reported (thermostat, fault relay, unlimited retry) and which functions are blocked while the fault is active (CH, boiler, free cooling, deaeration, DHW element, air regeneration, compressor, element).
+
+The fault settings are read from the heat pump only when you open the page for the first time since the add-on started, or when you press **Read from heat pump**; never in the background. Reading takes a few seconds. The page only reads: nothing is changed on the heat pump. The times are shown as the raw values stored in the heat pump (most likely seconds). The same data is available via `GET /api/v2/wpu/fault_settings`, and **Download JSON** saves a copy.
 
 ### Other recognized devices
 
